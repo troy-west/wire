@@ -3,6 +3,30 @@
             [rhizome.viz :as viz]))
 
 (defn compile-graph
+  "
+  Given a `dep-map` returns a `compiled graph` that is a map that contains
+  keys :wire/dep-graph and :wire/dep-map. :wire/dep-graph is a `DependencyGraph`
+  (provided by clojure.tools.namespace.dependency) and :wire/dep-map,
+  the original unchanged `dep-map`.
+
+  A `dep-map` describes a graph of dependent function calls, composing
+  a function graph explicitly. A `dep-map` maps keyword names to arguments
+  and functions that can be used to resolve values for those names.
+
+  An example graph may look like:
+
+  {:foo/c [[:foo/a :foo/b]
+           *]
+   :foo/d [[:foo/c]
+           inc]
+   :foo/e [[:foo/a :foo/c :foo/d]
+           +]}
+
+  In this example :foo/a and :foor/b are free variables, whilst :foo/c, :foo/d
+  and :foo/e are all bound and depend on the evaluation of the arguments listed
+  in the first element of the vector they map to.
+  e.g. :foo/e depends on :foo/a, :foo/c and :foo/d
+  "
   [dep-map]
   {:wire/dep-graph (reduce (fn [g [k [deps _]]]
                              (reduce
@@ -13,7 +37,11 @@
    :wire/dep-map dep-map})
 
 (defn free-variables
-  ([{:keys [:wire/dep-graph]}]
+  "
+  Given a `dep-graph` (`DependencyGraph`) and optional some `args` return the
+  argment names within the graph that are not been bound.
+  "
+  ([dep-graph]
    (free-variables dep-graph {}))
   ([{:keys [dependents dependencies]} args]
    (clojure.set/difference
@@ -22,37 +50,53 @@
      (into #{} (keys dependencies))
      (into #{} (keys args))))))
 
-(defn resolve-arg [results dep]
+(defn resolve-arg
+  [results dep]
   (get results dep))
 
-(defn resolve-args [results deps]
+(defn resolve-args
+  [results deps]
   (map (partial resolve-arg results) deps))
 
 (declare execute-graph)
 
-(defn execute-node [dep-map results node-key]
+(defn execute-node
+  [dep-map results node-key]
   (let [[deps f] (get dep-map node-key)
         args     (resolve-args results deps)]
     (apply f args)))
 
 (defn execute-graph
-  [{:keys [:wire/dep-graph :wire/dep-map]} arg-map]
-  (let [free-vars (free-variables dep-graph arg-map)]
+  "
+  Given a `compiled map` and some `args` resolve all the free variables in the
+  graphs. A map a keywords to their resolved values will be returned.
+  "
+  [{:keys [:wire/dep-graph :wire/dep-map]} args]
+  (let [free-vars (free-variables dep-graph args)]
     (if (not (empty? free-vars))
       (throw (java.lang.IllegalArgumentException.
               (str "The arguments " free-vars " are not bound. "
                    "You may need to pass them as an argument while executing the graph.")))
       (let [topo (->> (dep/topo-sort dep-graph)
                       (filter keyword?)
-                      (remove (into #{} (keys arg-map))))]
+                      (remove (into #{} (keys args))))]
         (reduce
          (fn [results k]
            (assoc results k (execute-node dep-map results k)))
-         arg-map topo)))))
+         args topo)))))
 
-(defn build-and-execute
-  [graph args]
-  (execute-graph (compile-graph graph) args))
+(defn compile-and-execute
+  "
+  Convenience fn, given a `dep-map` and `args` compile and execute the graph in
+  one step.
+  "
+  [dep-map args]
+  (execute-graph (compile-graph dep-map) args))
+
+
+;;
+;; helper functions to deal with namespaced keys within graphs
+;;
 
 (defn add-ns
   [k ns]
@@ -80,38 +124,145 @@
   (set (map namespace (keys m))))
 
 (defn replace-keys*
-  [m replacer]
+  [dep-map replacer]
   (reduce-kv
-   (fn [m k v]
+   (fn [dep-map k v]
      (let [replace-fn replacer]
-       (assoc m
+       (assoc dep-map
               (replace-fn k)
               (update-in v [0] (partial mapv replace-fn)))))
-   {} m))
+   {} dep-map))
+
+;;
+;; Public interface
+;;
 
 (defn replace-keys
-  [m key-map]
-  (replace-keys* m #(get key-map % %)))
+  "
+  Replaces keywords in the given `dep-map` by mapping to new keywords using
+  `key-map`. The keywords to be replaced can either be in the key position or
+  one of the arguments.
 
-(defn replace-ns
-  [m ns replacement-ns]
-  (replace-keys* m
-                 (fn [k] (if (= (namespace k) (name ns))
-                           (keyword (name replacement-ns) (name k))
-                           k))))
+  e.g.
+
+  => (replace-keys {:foo/c [[:foo/a :foo/b]
+                            *]
+                    :foo/d [[:foo/c]
+                            inc]
+                    :foo/e [[:foo/a :foo/c :foo/d]
+                            +]}
+                    {:foo/c :bar/z})
+
+  {:bar/z [[:foo/a :foo/b]
+           #function[clojure.core/*]]
+   :foo/d [[:bar/z]
+           #function[clojure.core/inc]]
+   :foo/e [[:foo/a :bar/z :foo/d]
+           #function[clojure.core/+]]}
+  "
+  [dep-map key-map]
+  (replace-keys* dep-map #(get key-map % %)))
+
+(defn replace-namespaces
+  "
+  Replaces namespaces in the given `dep-map` by mapping to new namespaces using
+  `ns-map`. The namespaces to be replaced can either be on the keyword in the
+  key position or on one of the arguments.
+
+  e.g.
+
+  => (replace-namespaces {:foo/c [[:bar/a :bar/b]
+                                  *]
+                          :bar/d [[:foo/c]
+                                  inc]
+                          :foo/e [[:foo/a :foo/c :bar/d]
+                                  +]}
+                          {:bar :baz})
+
+  {:foo/c [[:baz/a :baz/b]
+           #function[clojure.core/*]]
+   :baz/d [[:foo/c]
+           #function[clojure.core/inc]]
+   :foo/e [[:foo/a :foo/c :baz/d]
+           #function[clojure.core/+]]}
+  "
+  [dep-map ns-map]
+  (replace-keys* dep-map
+                 (fn [k]
+                   (let [replacement (ns-map (keyword (namespace k)))]
+                     (if replacement
+                       (keyword (name replacement) (name k))
+                       k)))))
 
 (defn append-ns
-  ([m ns]
-   (append-ns m ns {}))
-  ([m ns {:keys [include exclude only]}]
+  "
+  Appends an extra namespace, `ns`, to the existing namespaces in the `dep-map`.
+  The `ns` with be appended with a '.' delimiter to existing namespaces.
+
+  e.g.
+
+  => (append-ns {:foo/c [[:bar/a :bar/b]
+                         *]
+                 :bar/d [[:foo/c]
+                         inc]
+                 :foo/e [[:foo/a :foo/c :bar/d]
+                         +]}
+                :baz)
+
+  {:foo.baz/c [[:bar.baz/a :bar.baz/b]
+               #function[clojure.core/*]]
+   :bar.baz/d [[:foo.baz/c]
+               #function[clojure.core/inc]]
+   :foo.baz/e [[:foo.baz/a :foo.baz/c :bar.baz/d]
+               #function[clojure.core/+]]}
+
+  There are also options to `exclude` or `only` append to certain
+  namespaces.
+
+  e.g.
+
+  => (append-ns {:foo/c [[:bar/a :bar/b]
+                         *]
+                 :bar/d [[:foo/c]
+                         inc]
+                 :foo/e [[:foo/a :foo/c :bar/d]
+                         +]}
+                :baz
+                {:exclude #{:bar}})
+
+  {:foo.baz/c [[:bar/a :bar/b]
+               #function[clojure.core/*]]
+   :bar/d     [[:foo.baz/c]
+               #function[clojure.core/inc]]
+   :foo.baz/e [[:foo.baz/a :foo.baz/c :bar/d]
+               #function[clojure.core/+]]}
+
+  => (append-ns {:foo/c [[:bar/a :bar/b]
+                         *]
+                 :bar/d [[:foo/c]
+                         inc]
+                 :foo/e [[:foo/a :foo/c :bar/d]
+                         +]}
+                :baz
+                {:only #{:bar}})
+
+  {:foo/c     [[:bar.baz/a :bar.baz/b]
+               #function[clojure.core/*]]
+   :bar.baz/d [[:foo/c]
+               #function[clojure.core/inc]]
+   :foo/e     [[:foo/a :foo/c :bar.baz/d]
+               #function[clojure.core/+]]}
+  "
+  ([dep-map ns]
+   (append-ns dep-map ns {}))
+  ([dep-map ns {:keys [exclude only]}]
    (let [include-ns (if (seq only)
                       (set (map name only))
-                      (-> (set (concat include
-                                       (map namespace
-                                            (concat (keys m)
-                                                    (flatten (map first (vals m)))))))
+                      (-> (set (map namespace
+                                    (concat (keys dep-map)
+                                            (flatten (map first (vals dep-map))))))
                           (clojure.set/difference (set (map name exclude)))))]
-     (replace-keys* m
+     (replace-keys* dep-map
                     (fn [k] (if (contains? include-ns (namespace k))
                               (keyword (str (namespace k) "." (name ns))
                                        (name k))
