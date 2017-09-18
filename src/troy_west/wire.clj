@@ -4,8 +4,8 @@
 
 (defn compile-graph
   "
-  Given a `dep-map` returns a `compiled graph` that is a map that contains
-  keys :wire/dep-graph and :wire/dep-map. :wire/dep-graph is a `DependencyGraph`
+  Given a `dep-map` returns a `graph` that is a map that contains keys
+  :wire/dep-graph and :wire/dep-map. :wire/dep-graph is a `DependencyGraph`
   (provided by clojure.tools.namespace.dependency) and :wire/dep-map,
   the original unchanged `dep-map`.
 
@@ -68,7 +68,7 @@
 
 (defn execute-graph
   "
-  Given a `compiled map` and some `args` resolve all the free variables in the
+  Given a `graph` and some `args` resolve all the free variables in the
   graphs. A map a keywords to their resolved values will be returned.
   "
   [{:keys [:wire/dep-graph :wire/dep-map]} args]
@@ -95,33 +95,42 @@
 
 
 ;;
-;; helper functions to deal with namespaced keys within graphs
+;; Fns to help with composing and manipulating `dep-map` structures.
 ;;
 
-(defn add-ns
+(defn- add-ns
   [k ns]
   (if (qualified-keyword? k) k (keyword (name ns) (name k))))
 
 (defn with-ns
-  [m ns]
+  "
+  Add context to a given `dep-map` by adding the `ns` (namespace) to any keys
+  within `dep-map` that don't already contain namespaces.
+
+  e.g.
+
+  => (with-ns {:foo/c [[:a :b]
+                       *]
+               :foo/d [[:foo/c]
+                       inc]
+               :foo/e [[:a :foo/c :foo/d]
+                       +]}
+              :bar)
+
+  {:foo/c [[:bar/a :bar/b]
+           #function[clojure.core/*]]
+   :foo/d [[:foo/c]
+           #function[clojure.core/inc]]
+   :foo/e [[:bar/a :foo/c :foo/d]
+           #function[clojure.core/+]]}
+  "
+  [dep-map ns]
   (reduce-kv
    (fn [m k v]
      (assoc m
             (add-ns k ns)
             (update-in v [0] (partial mapv #(add-ns % ns)))))
-   {} m))
-
-(defn filter-ns
-  [m ns]
-  (select-keys m (filter #(= (namespace %) (name ns)) (keys m))))
-
-(defn re-filter-ns
-  [m re]
-  (select-keys m (filter #(re-matches re (namespace %)) (keys m))))
-
-(defn list-namespaces
-  [m]
-  (set (map namespace (keys m))))
+   {} dep-map))
 
 (defn replace-keys*
   [dep-map replacer]
@@ -132,10 +141,6 @@
               (replace-fn k)
               (update-in v [0] (partial mapv replace-fn)))))
    {} dep-map))
-
-;;
-;; Public interface
-;;
 
 (defn replace-keys
   "
@@ -268,6 +273,69 @@
                                        (name k))
                               k))))))
 
+(defn filter-ns
+  "
+  Filter the `dep-map` keys by `ns`.
+
+  e.g.
+
+  => (filter-ns {:foo/c [[:bar/a :bar/b]
+                         *]
+                 :bar/d [[:foo/c]
+                         inc]
+                 :foo/e [[:foo/a :foo/c :bar/d]
+                         +]}
+                :bar)
+
+  {:bar/d [[:foo/c]
+           inc]}
+  "
+  [dep-map ns]
+  (select-keys dep-map (filter #(= (namespace %) (name ns)) (keys dep-map))))
+
+(defn re-filter-ns
+  "
+  Filter the `dep-map` keys using a regex `re`.
+
+  e.g.
+
+  => (re-filter-ns {:foo/c [[:bar/a :bar/b]
+                            *]
+                    :bar/d [[:foo/c]
+                            inc]
+                    :foo/e [[:foo/a :foo/c :bar/d]
+                            +]}
+                   #\"f.*\")
+
+  {:foo/c [[:bar/a :bar/b]
+           *]
+   :foo/e [[:foo/a :foo/c :bar/d]
+           +]}
+  "
+  [dep-map re]
+  (select-keys dep-map (filter #(re-matches re (namespace %)) (keys dep-map))))
+
+(defn list-namespaces
+  "
+  List the namespaces in the keys of `dep-map`.
+
+  e.g.
+
+  => (list-namespace {:foo/c [[:bar/a :bar/b]
+                              *]
+                      :bar/d [[:foo/c]
+                              inc]
+                      :foo/e [[:foo/a :foo/c :bar/d]
+                              +]})
+  #{\"foo\" \"bar\"}
+  "
+  [dep-map]
+  (set (map namespace (keys dep-map))))
+
+;;
+;; Fns for use in visualising graphs
+;;
+
 (defn format-value
   ([form] (format-value nil))
   ([form filter-keys]
@@ -292,6 +360,9 @@
     {:label [n (format-value (-> graph :wire/dep-map n second) args)]}))
 
 (defn viz-graph*
+  "
+  Low level function for using rhizome.viz functions to visualise graphs.
+  "
   [viz-fn graph args results {:keys [node->descriptor]
                               :or   {node->descriptor (fn [_ _ _]
                                                         (fn [n] {:label n}))}
@@ -304,31 +375,44 @@
            (node->descriptor graph args results)
            (apply concat (dissoc opts :node->descriptor)))))
 
-(defn view-graph-nodes
+(defn view-graph-names
+  "
+  View a graph of the names (keywords) of the nodes.
+
+  The 2 arity version of this function will execute the `graph` with the given
+  `args`. The 3 arity version allows you to provided a map of the results of the
+  execution to avoid this function executing the graph.
+  "
   ([graph args]
    (view-graph-results graph args (execute-graph graph args)))
   ([graph args results]
-   (viz-graph* viz/view-graph
-               graph
-               args
-               (execute-graph graph args))))
+   (viz-graph* viz/view-graph graph args results)))
 
 (defn view-graph-results
+  "
+  View a graph of the names of the nodes along with their resolved value.
+
+  The 2 arity version of this function will execute the `graph` with the given
+  `args`. The 3 arity version allows you to provided a map of the results of the
+  execution to avoid this function executing the graph.
+  "
   ([graph args]
    (view-graph-results graph args (execute-graph graph args)))
   ([graph args results]
-   (viz-graph* viz/view-graph
-               graph
-               args
-               (execute-graph graph args)
+   (viz-graph* viz/view-graph graph args results
                {:node->descriptor describe-with-result})))
 
 (defn view-graph-fns
+  "
+  View a graph of the names of the nodes along with the function associated with
+  each node.
+
+  The 2 arity version of this function will execute the `graph` with the given
+  `args`. The 3 arity version allows you to provided a map of the results of the
+  execution to avoid this function executing the graph.
+  "
   ([graph args]
    (view-graph-fns graph args (execute-graph graph args)))
   ([graph args results]
-   (viz-graph* viz/view-graph
-               graph
-               args
-               (execute-graph graph args)
+   (viz-graph* viz/view-graph graph args results
                {:node->descriptor describe-with-fn})))
