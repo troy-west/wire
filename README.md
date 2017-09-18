@@ -1,6 +1,6 @@
 # Wire
 
-A small Clojure library for explicitly wiring together functions in a declaritive computation graph.
+A small Clojure library for explicitly wiring together functions into declarative computation graphs.
 
 ## Usage
 

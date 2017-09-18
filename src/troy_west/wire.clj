@@ -130,40 +130,6 @@
               :else x))
     form)))
 
-(defn viz-graph**** [viz-fn graph args & {:keys [filename]}]
-  (let [{:keys [:wire/dep-graph :wire/dep-map]} graph
-        results (execute-graph graph args)
-        graph-fn (partial viz-fn (concat (keys (:dependencies dep-graph))
-                                         (keys args))
-                          (:dependencies dep-graph)
-                          :node->descriptor (fn [n]
-                                              {:label [n (format-value (n results) args)]}))]
-    (if filename
-      (graph-fn :filename filename)
-      (graph-fn))))
-
-(defn viz-graph* [viz-fn graph args & {:keys [filename]}]
-  (let [{:keys [:wire/dep-graph :wire/dep-map]} graph
-        graph-fn (partial viz-fn (concat (keys (:dependencies dep-graph))
-                                         (keys args))
-                          (:dependencies dep-graph)
-                          :node->descriptor (fn [n]
-                                              {:label [#spy/p n (format-value (-> n dep-map second) args)]}))]
-    (if filename
-      (graph-fn :filename filename)
-      (graph-fn))))
-
-(defn viz-graph** [viz-fn graph args & {:keys [filename]}]
-  (let [{:keys [:wire/dep-graph :wire/dep-map]} graph
-        graph-fn (partial viz-fn (concat (keys (:dependencies dep-graph))
-                                         (keys args))
-                          (:dependencies dep-graph)
-                          :node->descriptor (fn [n]
-                                              {:label n}))]
-    (if filename
-      (graph-fn :filename filename)
-      (graph-fn))))
-
 (defn describe-with-result
   [_ args results]
   (fn [n]
@@ -174,7 +140,7 @@
   (fn [n]
     {:label [n (format-value (-> graph :wire/dep-map n second) args)]}))
 
-(defn viz-graph
+(defn viz-graph*
   [viz-fn graph args results {:keys [node->descriptor]
                               :or   {node->descriptor (fn [_ _ _]
                                                         (fn [n] {:label n}))}
@@ -186,3 +152,32 @@
            :node->descriptor
            (node->descriptor graph args results)
            (apply concat (dissoc opts :node->descriptor)))))
+
+(defn view-graph-nodes
+  ([graph args]
+   (view-graph-results graph args (execute-graph graph args)))
+  ([graph args results]
+   (viz-graph* viz/view-graph
+               graph
+               args
+               (execute-graph graph args))))
+
+(defn view-graph-results
+  ([graph args]
+   (view-graph-results graph args (execute-graph graph args)))
+  ([graph args results]
+   (viz-graph* viz/view-graph
+               graph
+               args
+               (execute-graph graph args)
+               {:node->descriptor describe-with-result})))
+
+(defn view-graph-fns
+  ([graph args]
+   (view-graph-fns graph args (execute-graph graph args)))
+  ([graph args results]
+   (viz-graph* viz/view-graph
+               graph
+               args
+               (execute-graph graph args)
+               {:node->descriptor describe-with-fn})))
