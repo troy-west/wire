@@ -59,18 +59,18 @@
   ```clojure
   => (require '[troy-west.wire :as wire])
   => (wire/compile-graph dep-map)
-  ;; {:wire/dep-graph #clojure.tools.namespace.dependency.MapDependencyGraph
-  ;;  {:dependencies {:foo/c #{:foo/a :foo/b},
-  ;;                  :foo/d #{:foo/c},
-  ;;                  :foo/e #{:foo/a :foo/c :foo/d}},
-  ;;   :dependents {:foo/a #{:foo/c :foo/e},
-  ;;                :foo/b #{:foo/c},
-  ;;                :foo/c #{:foo/d :foo/e},
-  ;;                :foo/d #{:foo/e}}},
-  ;;  :wire/dep-map {:foo/c [[:foo/a :foo/b] #<Fn@33ac9a84 clojure.core/_STAR_>],
-  ;;                 :foo/d [[:foo/c] #<Fn@5103b66c clojure.core/inc>],
-  ;;                 :foo/e [[:foo/a :foo/c :foo/d]
-  ;;                         #<Fn@72cd95df clojure.core/_PLUS_>]}}
+  {:wire/dep-graph #clojure.tools.namespace.dependency.MapDependencyGraph
+   {:dependencies {:foo/c #{:foo/a :foo/b},
+                   :foo/d #{:foo/c},
+                   :foo/e #{:foo/a :foo/c :foo/d}},
+    :dependents {:foo/a #{:foo/c :foo/e},
+                 :foo/b #{:foo/c},
+                 :foo/c #{:foo/d :foo/e},
+                 :foo/d #{:foo/e}}},
+   :wire/dep-map {:foo/c [[:foo/a :foo/b] #<Fn@33ac9a84 clojure.core/_STAR_>],
+                  :foo/d [[:foo/c] #<Fn@5103b66c clojure.core/inc>],
+                  :foo/e [[:foo/a :foo/c :foo/d]
+                          #<Fn@72cd95df clojure.core/_PLUS_>]}}
   ```
 
   You can find out if there are any unbound variables within the graph using
@@ -79,7 +79,7 @@
   ```clojure
   => (def graph (wire/compile-graph dep-map))
   => (wire/free-variables (:wire/dep-graph graph))
-  ;; #{:foo/b :foo/a}
+  #{:foo/b :foo/a}
   ```
 
   To execute a computation using the graph you will need to provide values for
@@ -87,8 +87,50 @@
 
   ```clojure
   => (wire/execute-graph graph {:foo/a 15 :foo/b 3})
-  ;; #:foo{:a 15, :b 3, :c 45, :d 46, :e 106}
+  #:foo{:a 15, :b 3, :c 45, :d 46, :e 106}
   ```
+
+  You can also compile and execute in one step:
+
+  ```clojure
+  => (wire/compile-and-execute dep-map {:foo/a 15 :foo/b 3})
+  #:foo{:a 15, :b 3, :c 45, :d 46, :e 106}
+  ```
+
+  Bound values can be overwritten with values in the `args` map,
+  useful for testing:
+
+  ```clojure
+  => (wire/compile-and-execute dep-map {:foo/a 15 :foo/b 3 :foo/c 20})
+  #:foo{:a 15, :b 3, :c 20, :d 21, :e 56}
+  ```
+
+  Dependency maps can be composed with `merge`:
+
+  ```clojure
+  => (wire/compile-and-execute (merge dep-map {:foo/b [[:foo/a] dec]})
+                               {:foo/a 15})
+  #:foo{:a 15, :b 14, :c 210, :d 211, :e 436}
+  ```
+
+  There are three built in functions for visualising graphs,
+  `viz-graph-names`, `viz-graph-results` and `viz-graph-fns`.
+
+  Each can be called like:
+
+  ```clojure
+  => (wire/viz-graph-names graph {:foo/a 15 :foo/b 3})
+  ```
+  ![View graph with names](img/viz-graph-names.png)
+  ```clojure
+  => (wire/viz-graph-results graph {:foo/a 15 :foo/b 3})
+  ```
+  ![View graph with results](img/viz-graph-results.png)
+  ```clojure
+  => (wire/viz-graph-fns graph {:foo/a 15 :foo/b 3})
+  ```
+  ![View graph with functions](img/viz-graph-fns.png)
+
   "
   (:require [clojure.tools.namespace.dependency :as dep]
             [rhizome.viz :as viz]))
@@ -464,46 +506,60 @@
            deps
            :node->descriptor
            (node->descriptor graph args results)
-           (apply concat (dissoc opts :node->descriptor)))))
+           :options {:rankdir :BT}
+           (apply concat (-> opts
+                             (dissoc :node->descriptor)
+                             (assoc :edge->descriptor (fn [_ _] {:dir :back})))))))
 
-(defn view-graph-names
+(defn viz-graph-names
   "
-  View a graph of the names (keywords) of the nodes.
+  Visualise a graph of the names (keywords) of the nodes.
 
   The 2 arity version of this function will execute the `graph` with the given
-  `args`. The 3 arity version allows you to provided a map of the results of the
-  execution to avoid this function executing the graph.
+  `args`. The 3 arity version allows you to provided an `opts` map containing
+  a `:results` map of the execution to avoid this function executing the graph.
   "
   ([graph args]
    (view-graph-names graph args (execute-graph graph args)))
-  ([graph args results]
-   (viz-graph* viz/view-graph graph args results)))
+  ([graph args {:keys [viz-fn results]
+                :or   {viz-fn  viz/view-graph
+                       results {}}
+                :as   opts}]
+   (viz-graph* viz-fn graph args results opts)))
 
-(defn view-graph-results
+(defn viz-graph-results
   "
-  View a graph of the names of the nodes along with their resolved value.
+  Visualise a graph of the names of the nodes along with their resolved value.
 
   The 2 arity version of this function will execute the `graph` with the given
-  `args`. The 3 arity version allows you to provided a map of the results of the
-  execution to avoid this function executing the graph.
+  `args`. The 3 arity version allows you to provided an `opts` map containing
+  a `:results` map of the execution to avoid this function executing the graph.
   "
   ([graph args]
-   (view-graph-results graph args (execute-graph graph args)))
-  ([graph args results]
-   (viz-graph* viz/view-graph graph args results
-               {:node->descriptor describe-with-result})))
+   (view-graph-results graph args {:results (execute-graph graph args)}))
+  ([graph args {:keys [viz-fn results]
+                :or   {viz-fn  viz/view-graph
+                       results {}}
+                :as   opts}]
+   (viz-graph* viz-fn graph args results (assoc opts
+                                                :node->descriptor
+                                                describe-with-result))))
 
-(defn view-graph-fns
+(defn viz-graph-fns
   "
-  View a graph of the names of the nodes along with the function associated with
+  Visualise a graph of the names of the nodes along with the function associated with
   each node.
 
   The 2 arity version of this function will execute the `graph` with the given
-  `args`. The 3 arity version allows you to provided a map of the results of the
-  execution to avoid this function executing the graph.
+  `args`. The 3 arity version allows you to provided an `opts` map containing
+  a `:results` map of the execution to avoid this function executing the graph.
   "
   ([graph args]
-   (view-graph-fns graph args (execute-graph graph args)))
-  ([graph args results]
-   (viz-graph* viz/view-graph graph args results
-               {:node->descriptor describe-with-fn})))
+   (view-graph-fns graph args {:results (execute-graph graph args)}))
+  ([graph args {:keys [viz-fn results]
+                :or   {viz-fn  viz/view-graph
+                       results {}}
+                :as   opts}]
+   (viz-graph* viz-fn graph args results (assoc opts
+                                                :node->descriptor
+                                                describe-with-fn))))
