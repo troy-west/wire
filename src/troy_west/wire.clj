@@ -105,6 +105,8 @@
   #:foo{:a 15, :b 3, :c 20, :d 21, :e 56}
   ```
 
+  ### Composition
+
   Dependency maps can be composed with `merge`:
 
   ```clojure
@@ -112,6 +114,13 @@
                                {:foo/a 15})
   #:foo{:a 15, :b 14, :c 210, :d 211, :e 436}
   ```
+
+  There are also a number of helper functions to add in composition of
+  dependency maps, see their doc strings for usage examples:
+  `with-ns`, `replace-keys`, `replace-namespaces`, `append-ns`, `filter-ns`,
+  `re-filter-ns`, `list-namespaces`
+
+  ### Visualisation
 
   There are three built in functions for visualising graphs,
   `viz-graph-names`, `viz-graph-results` and `viz-graph-fns`.
@@ -133,7 +142,8 @@
 
   "
   (:require [clojure.tools.namespace.dependency :as dep]
-            [rhizome.viz :as viz]))
+            [rhizome.viz :as viz]
+            [clojure.test :refer [is]]))
 
 (defn compile-graph
   "
@@ -231,39 +241,50 @@
 ;; Fns to help with composing and manipulating `dep-map` structures.
 ;;
 
+(defmacro with-test-doc
+  [definition & body]
+  (let [str-body (with-out-str
+                   (doseq [x body]
+                     (binding [clojure.pprint/*print-right-margin* 40]
+                       (clojure.pprint/pprint x))
+                     (newline)))]
+    `(doto ~definition
+       (alter-meta! assoc
+                    :test (fn [] ~@body)
+                    :doc (str (:doc (meta ~definition))
+                              "\ne.g.\n\n"
+                              ~str-body)))))
+
 (defn- add-ns
   [k ns]
   (if (qualified-keyword? k) k (keyword (name ns) (name k))))
 
-(defn with-ns
-  "
+(with-test-doc
+  (defn with-ns
+    "
   Add context to a given `dep-map` by adding the `ns` (namespace) to any keys
   within `dep-map` that don't already contain namespaces.
-
-  e.g.
-
-  => (with-ns {:foo/c [[:a :b]
-                       *]
-               :foo/d [[:foo/c]
-                       inc]
-               :foo/e [[:a :foo/c :foo/d]
-                       +]}
-              :bar)
-
-  {:foo/c [[:bar/a :bar/b]
-           #function[clojure.core/*]]
-   :foo/d [[:foo/c]
-           #function[clojure.core/inc]]
-   :foo/e [[:bar/a :foo/c :foo/d]
-           #function[clojure.core/+]]}
-  "
-  [dep-map ns]
-  (reduce-kv
-   (fn [m k v]
-     (assoc m
-            (add-ns k ns)
-            (update-in v [0] (partial mapv #(add-ns % ns)))))
-   {} dep-map))
+    "
+    [dep-map ns]
+    (reduce-kv
+     (fn [m k v]
+       (assoc m
+              (add-ns k ns)
+              (update-in v [0] (partial mapv #(add-ns % ns)))))
+     {} dep-map))
+  (is (= (with-ns* {:foo/c [[:a :b]
+                            *]
+                    :foo/d [[:foo/c]
+                            inc]
+                    :foo/e [[:a :foo/c :foo/d]
+                            +]}
+           :bar)
+         {:foo/c [[:bar/a :bar/b]
+                  *]
+          :foo/d [[:foo/c]
+                  inc]
+          :foo/e [[:bar/a :foo/c :foo/d]
+                  +]})))
 
 (defn replace-keys*
   [dep-map replacer]
@@ -275,195 +296,172 @@
               (update-in v [0] (partial mapv replace-fn)))))
    {} dep-map))
 
-(defn replace-keys
-  "
+(with-test-doc
+  (defn replace-keys
+    "
   Replaces keywords in the given `dep-map` by mapping to new keywords using
   `key-map`. The keywords to be replaced can either be in the key position or
   one of the arguments.
+    "
+    [dep-map key-map]
+    (replace-keys* dep-map #(get key-map % %)))
+  (is (= (replace-keys {:foo/c [[:foo/a :foo/b]
+                                *]
+                        :foo/d [[:foo/c]
+                                inc]
+                        :foo/e [[:foo/a :foo/c :foo/d]
+                                +]}
+                       {:foo/c :bar/z})
+         {:bar/z [[:foo/a :foo/b]
+                  *]
+          :foo/d [[:bar/z]
+                  inc]
+          :foo/e [[:foo/a :bar/z :foo/d]
+                  +]})))
 
-  e.g.
-
-  => (replace-keys {:foo/c [[:foo/a :foo/b]
-                            *]
-                    :foo/d [[:foo/c]
-                            inc]
-                    :foo/e [[:foo/a :foo/c :foo/d]
-                            +]}
-                    {:foo/c :bar/z})
-
-  {:bar/z [[:foo/a :foo/b]
-           #function[clojure.core/*]]
-   :foo/d [[:bar/z]
-           #function[clojure.core/inc]]
-   :foo/e [[:foo/a :bar/z :foo/d]
-           #function[clojure.core/+]]}
-  "
-  [dep-map key-map]
-  (replace-keys* dep-map #(get key-map % %)))
-
-(defn replace-namespaces
-  "
+(with-test-doc
+  (defn replace-namespaces
+    "
   Replaces namespaces in the given `dep-map` by mapping to new namespaces using
   `ns-map`. The namespaces to be replaced can either be on the keyword in the
   key position or on one of the arguments.
-
-  e.g.
-
-  => (replace-namespaces {:foo/c [[:bar/a :bar/b]
-                                  *]
-                          :bar/d [[:foo/c]
-                                  inc]
-                          :foo/e [[:foo/a :foo/c :bar/d]
-                                  +]}
-                          {:bar :baz})
-
-  {:foo/c [[:baz/a :baz/b]
-           #function[clojure.core/*]]
-   :baz/d [[:foo/c]
-           #function[clojure.core/inc]]
-   :foo/e [[:foo/a :foo/c :baz/d]
-           #function[clojure.core/+]]}
-  "
-  [dep-map ns-map]
-  (replace-keys* dep-map
-                 (fn [k]
-                   (let [replacement (ns-map (keyword (namespace k)))]
-                     (if replacement
-                       (keyword (name replacement) (name k))
-                       k)))))
-
-(defn append-ns
-  "
+    "
+    [dep-map ns-map]
+    (replace-keys* dep-map
+                   (fn [k]
+                     (let [replacement (ns-map (keyword (namespace k)))]
+                       (if replacement
+                         (keyword (name replacement) (name k))
+                         k)))))
+  (is (= (replace-namespaces {:foo/c [[:bar/a :bar/b]
+                                      *]
+                              :bar/d [[:foo/c]
+                                      inc]
+                              :foo/e [[:foo/a :foo/c :bar/d]
+                                      +]}
+                             {:bar :baz})
+         {:foo/c [[:baz/a :baz/b]
+                  *]
+          :baz/d [[:foo/c]
+                  inc]
+          :foo/e [[:foo/a :foo/c :baz/d]
+                  +]})))
+(with-test-doc
+  (defn append-ns
+    "
   Appends an extra namespace, `ns`, to the existing namespaces in the `dep-map`.
+
   The `ns` with be appended with a '.' delimiter to existing namespaces.
-
-  e.g.
-
-  => (append-ns {:foo/c [[:bar/a :bar/b]
-                         *]
-                 :bar/d [[:foo/c]
-                         inc]
-                 :foo/e [[:foo/a :foo/c :bar/d]
-                         +]}
-                :baz)
-
-  {:foo.baz/c [[:bar.baz/a :bar.baz/b]
-               #function[clojure.core/*]]
-   :bar.baz/d [[:foo.baz/c]
-               #function[clojure.core/inc]]
-   :foo.baz/e [[:foo.baz/a :foo.baz/c :bar.baz/d]
-               #function[clojure.core/+]]}
 
   There are also options to `exclude` or `only` append to certain
   namespaces.
+    "
+    ([dep-map ns]
+     (append-ns dep-map ns {}))
+    ([dep-map ns {:keys [exclude only]}]
+     (let [include-ns (if (seq only)
+                        (set (map name only))
+                        (-> (set (map namespace
+                                      (concat (keys dep-map)
+                                              (flatten (map first (vals dep-map))))))
+                            (clojure.set/difference (set (map name exclude)))))]
+       (replace-keys* dep-map
+                      (fn [k] (if (contains? include-ns (namespace k))
+                                (keyword (str (namespace k) "." (name ns))
+                                         (name k))
+                                k))))))
+  (is (= (append-ns {:foo/c [[:bar/a :bar/b]
+                             *]
+                     :bar/d [[:foo/c]
+                             inc]
+                     :foo/e [[:foo/a :foo/c :bar/d]
+                             +]}
+                    :baz)
+         {:foo.baz/c [[:bar.baz/a :bar.baz/b]
+                      *]
+          :bar.baz/d [[:foo.baz/c]
+                      inc]
+          :foo.baz/e [[:foo.baz/a :foo.baz/c :bar.baz/d]
+                      +]}))
+  (is (= (append-ns {:foo/c [[:bar/a :bar/b]
+                             *]
+                     :bar/d [[:foo/c]
+                             inc]
+                     :foo/e [[:foo/a :foo/c :bar/d]
+                             +]}
+                    :baz
+                    {:exclude #{:bar}})
+         {:foo.baz/c [[:bar/a :bar/b]
+                      *]
+          :bar/d     [[:foo.baz/c]
+                      inc]
+          :foo.baz/e [[:foo.baz/a :foo.baz/c :bar/d]
+                      +]}))
+  (is (= (append-ns {:foo/c [[:bar/a :bar/b]
+                             *]
+                     :bar/d [[:foo/c]
+                             inc]
+                     :foo/e [[:foo/a :foo/c :bar/d]
+                             +]}
+                    :baz
+                    {:only #{:bar}})
+         {:foo/c     [[:bar.baz/a :bar.baz/b]
+                      *]
+          :bar.baz/d [[:foo/c]
+                      inc]
+          :foo/e     [[:foo/a :foo/c :bar.baz/d]
+                      +]})))
 
-  e.g.
-
-  => (append-ns {:foo/c [[:bar/a :bar/b]
-                         *]
-                 :bar/d [[:foo/c]
-                         inc]
-                 :foo/e [[:foo/a :foo/c :bar/d]
-                         +]}
-                :baz
-                {:exclude #{:bar}})
-
-  {:foo.baz/c [[:bar/a :bar/b]
-               #function[clojure.core/*]]
-   :bar/d     [[:foo.baz/c]
-               #function[clojure.core/inc]]
-   :foo.baz/e [[:foo.baz/a :foo.baz/c :bar/d]
-               #function[clojure.core/+]]}
-
-  => (append-ns {:foo/c [[:bar/a :bar/b]
-                         *]
-                 :bar/d [[:foo/c]
-                         inc]
-                 :foo/e [[:foo/a :foo/c :bar/d]
-                         +]}
-                :baz
-                {:only #{:bar}})
-
-  {:foo/c     [[:bar.baz/a :bar.baz/b]
-               #function[clojure.core/*]]
-   :bar.baz/d [[:foo/c]
-               #function[clojure.core/inc]]
-   :foo/e     [[:foo/a :foo/c :bar.baz/d]
-               #function[clojure.core/+]]}
-  "
-  ([dep-map ns]
-   (append-ns dep-map ns {}))
-  ([dep-map ns {:keys [exclude only]}]
-   (let [include-ns (if (seq only)
-                      (set (map name only))
-                      (-> (set (map namespace
-                                    (concat (keys dep-map)
-                                            (flatten (map first (vals dep-map))))))
-                          (clojure.set/difference (set (map name exclude)))))]
-     (replace-keys* dep-map
-                    (fn [k] (if (contains? include-ns (namespace k))
-                              (keyword (str (namespace k) "." (name ns))
-                                       (name k))
-                              k))))))
-
-(defn filter-ns
-  "
+(with-test-doc
+  (defn filter-ns
+    "
   Filter the `dep-map` keys by `ns`.
+    "
+    [dep-map ns]
+    (select-keys dep-map (filter #(= (namespace %) (name ns)) (keys dep-map))))
+  (is (= (filter-ns {:foo/c [[:bar/a :bar/b]
+                             *]
+                     :bar/d [[:foo/c]
+                             inc]
+                     :foo/e [[:foo/a :foo/c :bar/d]
+                             +]}
+                    :bar)
+         {:bar/d [[:foo/c]
+                  inc]})))
 
-  e.g.
-
-  => (filter-ns {:foo/c [[:bar/a :bar/b]
-                         *]
-                 :bar/d [[:foo/c]
-                         inc]
-                 :foo/e [[:foo/a :foo/c :bar/d]
-                         +]}
-                :bar)
-
-  {:bar/d [[:foo/c]
-           inc]}
-  "
-  [dep-map ns]
-  (select-keys dep-map (filter #(= (namespace %) (name ns)) (keys dep-map))))
-
-(defn re-filter-ns
-  "
+(with-test-doc
+  (defn re-filter-ns
+    "
   Filter the `dep-map` keys using a regex `re`.
+    "
+    [dep-map re]
+    (select-keys dep-map (filter #(re-matches re (namespace %)) (keys dep-map))))
+  (is (= (re-filter-ns {:foo/c [[:bar/a :bar/b]
+                                *]
+                        :bar/d [[:foo/c]
+                                inc]
+                        :foo/e [[:foo/a :foo/c :bar/d]
+                                +]}
+                       #"f.*")
+         {:foo/c [[:bar/a :bar/b]
+                  *]
+          :foo/e [[:foo/a :foo/c :bar/d]
+                  +]})))
 
-  e.g.
-
-  => (re-filter-ns {:foo/c [[:bar/a :bar/b]
-                            *]
-                    :bar/d [[:foo/c]
-                            inc]
-                    :foo/e [[:foo/a :foo/c :bar/d]
-                            +]}
-                   #\"f.*\")
-
-  {:foo/c [[:bar/a :bar/b]
-           *]
-   :foo/e [[:foo/a :foo/c :bar/d]
-           +]}
-  "
-  [dep-map re]
-  (select-keys dep-map (filter #(re-matches re (namespace %)) (keys dep-map))))
-
-(defn list-namespaces
-  "
+(with-test-doc
+  (defn list-namespaces
+    "
   List the namespaces in the keys of `dep-map`.
-
-  e.g.
-
-  => (list-namespace {:foo/c [[:bar/a :bar/b]
-                              *]
-                      :bar/d [[:foo/c]
-                              inc]
-                      :foo/e [[:foo/a :foo/c :bar/d]
-                              +]})
-  #{\"foo\" \"bar\"}
-  "
-  [dep-map]
-  (set (map namespace (keys dep-map))))
+    "
+    [dep-map]
+    (set (map namespace (keys dep-map))))
+  (is (= (list-namespaces {:foo/c [[:bar/a :bar/b]
+                                   *]
+                           :bar/d [[:foo/c]
+                                   inc]
+                           :foo/e [[:foo/a :foo/c :bar/d]
+                                   +]})
+         #{"foo" "bar"})))
 
 ;;
 ;; Fns for use in visualising graphs
@@ -520,7 +518,7 @@
   a `:results` map of the execution to avoid this function executing the graph.
   "
   ([graph args]
-   (view-graph-names graph args (execute-graph graph args)))
+   (viz-graph-names graph args (execute-graph graph args)))
   ([graph args {:keys [viz-fn results]
                 :or   {viz-fn  viz/view-graph
                        results {}}
@@ -536,7 +534,7 @@
   a `:results` map of the execution to avoid this function executing the graph.
   "
   ([graph args]
-   (view-graph-results graph args {:results (execute-graph graph args)}))
+   (viz-graph-results graph args {:results (execute-graph graph args)}))
   ([graph args {:keys [viz-fn results]
                 :or   {viz-fn  viz/view-graph
                        results {}}
@@ -555,7 +553,7 @@
   a `:results` map of the execution to avoid this function executing the graph.
   "
   ([graph args]
-   (view-graph-fns graph args {:results (execute-graph graph args)}))
+   (viz-graph-fns graph args {:results (execute-graph graph args)}))
   ([graph args {:keys [viz-fn results]
                 :or   {viz-fn  viz/view-graph
                        results {}}

@@ -109,6 +109,8 @@
   #:foo{:a 15, :b 3, :c 20, :d 21, :e 56}
   ```
 
+  ### Composition
+
   Dependency maps can be composed with `merge`:
 
   ```clojure
@@ -116,6 +118,13 @@
                                {:foo/a 15})
   #:foo{:a 15, :b 14, :c 210, :d 211, :e 436}
   ```
+
+  There are also a number of helper functions to add in composition of
+  dependency maps, see their doc strings for usage examples:
+  `with-ns`, `replace-keys`, `replace-namespaces`, `append-ns`, `filter-ns`,
+  `re-filter-ns`, `list-namespaces`
+
+  ### Visualisation
 
   There are three built in functions for visualising graphs,
   `viz-graph-names`, `viz-graph-results` and `viz-graph-fns`.
