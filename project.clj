@@ -1,7 +1,7 @@
 (defproject com.troy-west/wire "0.1.1-SNAPSHOT"
   :description "A small Clojure library for explicitly wiring together functions into declarative computation graphs."
   
-  :url "https://github.com/troy-west/wire.git"
+  :url "https://github.com/troy-west/wire"
   
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v20.html"}
