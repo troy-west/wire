@@ -146,7 +146,6 @@
 
 ## License
 
-Copyright © 2017 FIXME
+Copyright © 2018 [Troy-West, Pty Ltd.](http://www.troywest.com)
 
-Distributed under the Eclipse Public License either version 1.0 or (at
-your option) any later version.
+Distributed under the Eclipse Public License either version 2.0 or (at your option) any later version.
