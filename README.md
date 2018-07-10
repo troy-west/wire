@@ -1,9 +1,7 @@
 # Wire
 
-  ## Install
-
-  [com.troy-west/wire "0.1.0-SNAPSHOT"]
-
+  [![Clojars Project](https://img.shields.io/clojars/v/com.troy-west/wire.svg)](https://clojars.org/com.troy-west/wire)
+  
   ## Description
 
   A small Clojure library for explicitly wiring together functions into
