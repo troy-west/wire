@@ -1,4 +1,4 @@
-(defproject com.troy-west/wire "0.1.0-SNAPSHOT"
+(defproject com.troy-west/wire "0.1.0"
   :description "A small Clojure library for explicitly wiring together functions into declarative computation graphs."
   
   :url "https://github.com/troy-west/wire.git"
